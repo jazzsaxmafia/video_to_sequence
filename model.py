@@ -8,7 +8,6 @@ import ipdb
 import cv2
 
 from tensorflow.models.rnn import rnn_cell
-from tensorflow.models.rnn import seq2seq
 from keras.preprocessing import sequence
 
 class Video_Caption_Generator():
@@ -94,8 +93,52 @@ class Video_Caption_Generator():
         return loss, video, video_mask, caption, caption_mask
 
 
-    def build_tester(self):
-        pass
+    def build_generator(self):
+        video = tf.placeholder(tf.float32, [1, self.n_lstm_steps, self.dim_image])
+        video_mask = tf.placeholder(tf.float32, [1, self.n_lstm_steps])
+
+        video_flat = tf.reshape(video, [-1, self.dim_image])
+        image_emb = tf.nn.xw_plus_b( video_flat, self.encode_image_W, self.encode_image_b)
+        image_emb = tf.reshape(image_emb, [1, self.n_lstm_steps, self.dim_hidden])
+
+        state1 = tf.zeros([1, self.lstm1.state_size])
+        state2 = tf.zeros([1, self.lstm2.state_size])
+        padding = tf.zeros([1, self.dim_hidden])
+
+        generated_words = []
+
+        for i in range(self.n_lstm_steps):
+            if i > 0: tf.get_variable_scope().reuse_variables()
+
+            with tf.variable_scope("LSTM1"):
+                output1, state1 = self.lstm1( image_emb[:,i,:], state1 )
+
+            with tf.variable_scope("LSTM2"):
+                output2, state2 = self.lstm2( padding, state2 )
+
+        for i in range(self.n_lstm_steps):
+
+            tf.get_variable_scope().reuse_variables()
+
+            if i == 0:
+                current_embed = tf.zeros([1, self.dim_hidden])
+
+            with tf.variable_scope("LSTM1"):
+                output1, state1 = self.lstm1( padding, state1 )
+
+            with tf.variable_scope("LSTM2"):
+                output2, state2 = self.lstm2( current_embed, state2 )
+
+            logit_words = tf.nn.xw_plus_b( output2, self.embed_word_W, self.embed_word_b)
+            max_prob_index = tf.argmax(logit_words, 1)[0]
+            generated_words.append(max_prob_index)
+
+            with tf.device("/cpu:0"):
+                current_embed = tf.nn.embedding_lookup(self.Wemb, max_prob_index)
+                current_embed = tf.expand_dims(current_embed, 0)
+
+        return video, video_mask, generated_words
+
 
 ############### Global Parameters ###############
 video_path = '/media/storage3/Study/data/youtube_videos'
@@ -165,6 +208,8 @@ def preProBuildWordVocab(sentence_iterator, word_count_threshold=5): # borrowed 
 def train():
     train_data, _ = get_video_data(video_data_path, video_save_path, train_ratio=0.9)
     captions = train_data['Description'].values
+    captions = map(lambda x: x.replace('.', ''), captions)
+    captions = map(lambda x: x.replace(',', ''), captions)
     wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
 
     np.save('./data/ixtoword', ixtoword)
@@ -228,3 +273,35 @@ def train():
             print loss_val
         print "Epoch ", epoch, " is done. Saving the model ..."
         saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
+
+def test(model_path='models/model-45', video_feat_path='/media/storage3/Study/data/youtube_videos/hxZ-5wELSJM_0_12.avi.npy'):
+    _, test_data = get_video_data(video_data_path, video_save_path, train_ratio=0.9)
+    ixtoword = pd.Series(np.load('./data/ixtoword.npy').tolist())
+
+    model = Video_Caption_Generator(
+            dim_image=dim_image,
+            n_words=len(ixtoword),
+            dim_hidden=dim_hidden,
+            batch_size=batch_size,
+            n_lstm_steps=n_frame_step,
+            bias_init_vector=None)
+
+    video_tf, video_mask_tf, caption_tf = model.build_generator()
+    sess = tf.InteractiveSession()
+
+    saver = tf.train.Saver()
+    saver.restore(sess, model_path)
+
+    video_feat = np.load(video_feat_path)[None,...]
+    video_mask = np.ones((video_feat.shape[0], video_feat.shape[1]))
+
+    generated_word_index = sess.run(caption_tf, feed_dict={video_tf:video_feat, video_mask_tf:video_mask})
+    generated_words = ixtoword[generated_word_index]
+
+    punctuation = np.argmax(np.array(generated_words) == '.')+1
+    generated_words = generated_words[:punctuation]
+
+    generated_sentence = ' '.join(generated_words)
+    print generated_sentence
+
+    ipdb.set_trace()
