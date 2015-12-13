@@ -23,7 +23,7 @@ def download_and_process_video(save_path, row):
     if os.path.exists('tmp.mp4'):
         os.system('rm tmp.mp4')
 
-    try: # 씨발 -> 다운로드 포기
+    try: # 다운로드 포기
         youtube = YouTube("https://www.youtube.com/watch?v="+video_id)
     except:
         print "다운로드 포기"
