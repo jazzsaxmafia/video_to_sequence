@@ -64,6 +64,7 @@ class Video_Caption_Generator():
 
         # Each video might have different length. Need to mask those.
         # But how? Padding with 0 would be enough?
+        # Therefore... TODO: for those short videos, keep the last LSTM hidden and output til the end.
 
         for i in range(self.n_lstm_steps): ## Phase 2 => only generate captions
             if i == 0:
@@ -293,7 +294,7 @@ def train():
             print "Epoch ", epoch, " is done. Saving the model ..."
             saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
 
-def test(model_path='models/model-700', video_feat_path=video_feat_path):
+def test(model_path='models/model-900', video_feat_path=video_feat_path):
 
     train_data, test_data = get_video_data(video_data_path, video_feat_path, train_ratio=0.9)
     test_videos = test_data['video_path'].unique()
