@@ -11,3 +11,5 @@
 * Train: train() in model.py
  * You might need to change the paths in "Global Parameters" area according to your environment
 * Test: test() in model.py
+
+![alt tag](https://github.com/jazzsaxmafia/video_to_sequence/blob/master/plane.jpg)
