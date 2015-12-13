@@ -48,6 +48,8 @@ class Video_Caption_Generator():
         state2 = tf.zeros([self.batch_size, self.lstm2.state_size])
         padding = tf.zeros([self.batch_size, self.dim_hidden])
 
+        probs = []
+
         loss = 0.0
 
         for i in range(self.n_lstm_steps): ## Phase 1 => only read frames
@@ -58,7 +60,7 @@ class Video_Caption_Generator():
                 output1, state1 = self.lstm1( image_emb[:,i,:], state1 )
 
             with tf.variable_scope("LSTM2"):
-                output2, state2 = self.lstm2( padding, state2 )
+                output2, state2 = self.lstm2( tf.concat(1,[padding, output1]), state2 )
 
         # Each video might have different length. Need to mask those.
         # But how? Padding with 0 would be enough?
@@ -75,7 +77,7 @@ class Video_Caption_Generator():
                 output1, state1 = self.lstm1( padding, state1 )
 
             with tf.variable_scope("LSTM2"):
-                output2, state2 = self.lstm2( current_embed, state2 )
+                output2, state2 = self.lstm2( tf.concat(1,[current_embed, output1]), state2 )
 
             labels = tf.expand_dims(caption[:,i], 1)
             indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1)
@@ -86,11 +88,13 @@ class Video_Caption_Generator():
             cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logit_words, onehot_labels)
             cross_entropy = cross_entropy * caption_mask[:,i]
 
+            probs.append(logit_words)
+
             current_loss = tf.reduce_sum(cross_entropy)
             loss += current_loss
 
         loss = loss / tf.reduce_sum(caption_mask)
-        return loss, video, video_mask, caption, caption_mask
+        return loss, video, video_mask, caption, caption_mask, probs
 
 
     def build_generator(self):
@@ -107,6 +111,9 @@ class Video_Caption_Generator():
 
         generated_words = []
 
+        probs = []
+        embeds = []
+
         for i in range(self.n_lstm_steps):
             if i > 0: tf.get_variable_scope().reuse_variables()
 
@@ -114,7 +121,7 @@ class Video_Caption_Generator():
                 output1, state1 = self.lstm1( image_emb[:,i,:], state1 )
 
             with tf.variable_scope("LSTM2"):
-                output2, state2 = self.lstm2( padding, state2 )
+                output2, state2 = self.lstm2( tf.concat(1,[padding,output1]), state2 )
 
         for i in range(self.n_lstm_steps):
 
@@ -127,23 +134,26 @@ class Video_Caption_Generator():
                 output1, state1 = self.lstm1( padding, state1 )
 
             with tf.variable_scope("LSTM2"):
-                output2, state2 = self.lstm2( current_embed, state2 )
+                output2, state2 = self.lstm2( tf.concat(1,[current_embed,output1]), state2 )
 
             logit_words = tf.nn.xw_plus_b( output2, self.embed_word_W, self.embed_word_b)
             max_prob_index = tf.argmax(logit_words, 1)[0]
             generated_words.append(max_prob_index)
+            probs.append(logit_words)
 
             with tf.device("/cpu:0"):
                 current_embed = tf.nn.embedding_lookup(self.Wemb, max_prob_index)
                 current_embed = tf.expand_dims(current_embed, 0)
 
-        return video, video_mask, generated_words
+            embeds.append(current_embed)
+
+        return video, video_mask, generated_words, probs, embeds
 
 
 ############### Global Parameters ###############
 video_path = '/media/storage3/Study/data/youtube_videos'
 video_data_path='./data/video_corpus.csv'
-video_save_path = '/media/storage3/Study/data/youtube_videos'
+video_feat_path = '/media/storage3/Study/data/youtube_feats'
 
 vgg16_path = '/home/taeksoo/Package/tensorflow_vgg16/vgg16.tfmodel'
 
@@ -153,15 +163,15 @@ dim_image = 4096
 dim_hidden= 256
 n_frame_step = 80
 n_epochs = 1000
-batch_size = 50
+batch_size = 100
 learning_rate = 0.001
 ##################################################
 
-def get_video_data(video_data_path, video_save_path, train_ratio=0.9):
+def get_video_data(video_data_path, video_feat_path, train_ratio=0.9):
     video_data = pd.read_csv(video_data_path, sep=',')
     video_data = video_data[video_data['Language'] == 'English']
     video_data['video_path'] = video_data.apply(lambda row: row['VideoID']+'_'+str(row['Start'])+'_'+str(row['End'])+'.avi.npy', axis=1)
-    video_data['video_path'] = video_data['video_path'].map(lambda x: os.path.join(video_save_path, x))
+    video_data['video_path'] = video_data['video_path'].map(lambda x: os.path.join(video_feat_path, x))
     video_data = video_data[video_data['video_path'].map(lambda x: os.path.exists( x ))]
     video_data = video_data[video_data['Description'].map(lambda x: isinstance(x, str))]
 
@@ -206,11 +216,11 @@ def preProBuildWordVocab(sentence_iterator, word_count_threshold=5): # borrowed 
     return wordtoix, ixtoword, bias_init_vector
 
 def train():
-    train_data, _ = get_video_data(video_data_path, video_save_path, train_ratio=0.9)
+    train_data, _ = get_video_data(video_data_path, video_feat_path, train_ratio=0.9)
     captions = train_data['Description'].values
     captions = map(lambda x: x.replace('.', ''), captions)
     captions = map(lambda x: x.replace(',', ''), captions)
-    wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
+    wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions, word_count_threshold=10)
 
     np.save('./data/ixtoword', ixtoword)
 
@@ -222,7 +232,7 @@ def train():
             n_lstm_steps=n_frame_step,
             bias_init_vector=bias_init_vector)
 
-    tf_loss, tf_video, tf_video_mask, tf_caption, tf_caption_mask = model.build_model()
+    tf_loss, tf_video, tf_video_mask, tf_caption, tf_caption_mask, tf_probs = model.build_model()
     sess = tf.InteractiveSession()
 
     saver = tf.train.Saver(max_to_keep=10)
@@ -234,11 +244,14 @@ def train():
         np.random.shuffle(index)
         train_data = train_data.ix[index]
 
-        for start,end in zip(
-                range(0, len(train_data), batch_size),
-                range(batch_size, len(train_data), batch_size)):
+        current_train_data = train_data.groupby('video_path').apply(lambda x: x.irow(np.random.choice(len(x))))
+        current_train_data = current_train_data.reset_index(drop=True)
 
-            current_batch = train_data[start:end]
+        for start,end in zip(
+                range(0, len(current_train_data), batch_size),
+                range(batch_size, len(current_train_data), batch_size)):
+
+            current_batch = current_train_data[start:end]
             current_videos = current_batch['video_path'].values
 
             current_feats = np.zeros((batch_size, n_frame_step, dim_image))
@@ -261,6 +274,11 @@ def train():
             for ind, row in enumerate(current_caption_masks):
                 row[:nonzeros[ind]] = 1
 
+            probs_val = sess.run(tf_probs, feed_dict={
+                tf_video:current_feats,
+                tf_caption: current_caption_matrix
+                })
+
             _, loss_val = sess.run(
                     [train_op, tf_loss],
                     feed_dict={
@@ -271,11 +289,14 @@ def train():
                         })
 
             print loss_val
-        print "Epoch ", epoch, " is done. Saving the model ..."
-        saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
+        if np.mod(epoch, 100) == 0:
+            print "Epoch ", epoch, " is done. Saving the model ..."
+            saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
 
-def test(model_path='models/model-45', video_feat_path='/media/storage3/Study/data/youtube_videos/hxZ-5wELSJM_0_12.avi.npy'):
-    _, test_data = get_video_data(video_data_path, video_save_path, train_ratio=0.9)
+def test(model_path='models/model-700', video_feat_path=video_feat_path):
+
+    train_data, test_data = get_video_data(video_data_path, video_feat_path, train_ratio=0.9)
+    test_videos = test_data['video_path'].unique()
     ixtoword = pd.Series(np.load('./data/ixtoword.npy').tolist())
 
     model = Video_Caption_Generator(
@@ -286,22 +307,27 @@ def test(model_path='models/model-45', video_feat_path='/media/storage3/Study/da
             n_lstm_steps=n_frame_step,
             bias_init_vector=None)
 
-    video_tf, video_mask_tf, caption_tf = model.build_generator()
+    video_tf, video_mask_tf, caption_tf, probs_tf, last_embed_tf = model.build_generator()
     sess = tf.InteractiveSession()
 
     saver = tf.train.Saver()
     saver.restore(sess, model_path)
 
-    video_feat = np.load(video_feat_path)[None,...]
-    video_mask = np.ones((video_feat.shape[0], video_feat.shape[1]))
+    for video_feat_path in test_videos:
+        print video_feat_path
+        video_feat = np.load(video_feat_path)[None,...]
+        video_mask = np.ones((video_feat.shape[0], video_feat.shape[1]))
 
-    generated_word_index = sess.run(caption_tf, feed_dict={video_tf:video_feat, video_mask_tf:video_mask})
-    generated_words = ixtoword[generated_word_index]
+        generated_word_index = sess.run(caption_tf, feed_dict={video_tf:video_feat, video_mask_tf:video_mask})
+        probs_val = sess.run(probs_tf, feed_dict={video_tf:video_feat})
+        embed_val = sess.run(last_embed_tf, feed_dict={video_tf:video_feat})
+        generated_words = ixtoword[generated_word_index]
 
-    punctuation = np.argmax(np.array(generated_words) == '.')+1
-    generated_words = generated_words[:punctuation]
+        punctuation = np.argmax(np.array(generated_words) == '.')+1
+        generated_words = generated_words[:punctuation]
 
-    generated_sentence = ' '.join(generated_words)
-    print generated_sentence
+        generated_sentence = ' '.join(generated_words)
+        print generated_sentence
+        ipdb.set_trace()
 
     ipdb.set_trace()

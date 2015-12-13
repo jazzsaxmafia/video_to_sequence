@@ -12,27 +12,54 @@ import pandas as pd
 import skimage
 from cnn_util import *
 
-def preprocess_frame(frame):
-    short_edge = min(frame.shape[:2])
-    yy = int((frame.shape[0] - short_edge) / 2)
-    xx = int((frame.shape[1] - short_edge) / 2)
-    crop_img = frame[yy : yy + short_edge, xx : xx + short_edge]
-    resized_img = skimage.transform.resize(crop_img, (224, 224))
 
-    return resized_img
+def preprocess_frame(image, target_height=224, target_width=224):
+
+    if len(image.shape) == 2:
+        image = np.tile(image[:,:,None], 3)
+    elif len(image.shape) == 4:
+        image = image[:,:,:,0]
+
+    image = skimage.img_as_float(image).astype(np.float32)
+    height, width, rgb = image.shape
+    if width == height:
+        resized_image = cv2.resize(image, (target_height,target_width))
+
+    elif height < width:
+        resized_image = cv2.resize(image, (int(width * float(target_height)/height), target_width))
+        cropping_length = int((resized_image.shape[1] - target_height) / 2)
+        resized_image = resized_image[:,cropping_length:resized_image.shape[1] - cropping_length]
+
+    else:
+        resized_image = cv2.resize(image, (target_height, int(height * float(target_width) / width)))
+        cropping_length = int((resized_image.shape[0] - target_width) / 2)
+        resized_image = resized_image[cropping_length:resized_image.shape[0] - cropping_length,:]
+
+    return cv2.resize(resized_image, (target_height, target_width))
 
 def main():
     num_frames = 80
     vgg_model = '/home/taeksoo/Package/caffe/models/vgg/VGG_ILSVRC_19_layers.caffemodel'
     vgg_deploy = '/home/taeksoo/Package/caffe/models/vgg/VGG_ILSVRC_19_layers_deploy.prototxt'
-    video_save_path = '/media/storage3/Study/data/youtube_videos'
-    videos = os.listdir(video_save_path)
+    video_path = '/media/storage3/Study/data/youtube_videos'
+    video_save_path = '/media/storage3/Study/data/youtube_feats'
+    videos = os.listdir(video_path)
+    videos = filter(lambda x: x.endswith('avi'), videos)
 
     cnn = CNN(model=vgg_model, deploy=vgg_deploy, width=224, height=224)
 
     for video in videos:
-        video_fullpath = os.path.join(video_save_path, video)
-        cap  = cv2.VideoCapture( video_fullpath )
+        print video
+
+        if os.path.exists( os.path.join(video_save_path, video) ):
+            print "Already processed ... "
+            continue
+
+        video_fullpath = os.path.join(video_path, video)
+        try:
+            cap  = cv2.VideoCapture( video_fullpath )
+        except:
+            pass
 
         frame_count = 0
         frame_list = []
