@@ -9,4 +9,5 @@
  * Set paths in cnn_utils.py and preprocess.py 
  * Sample & extract features by running "preprocessing.py"
 * Train: train() in model.py
+ * You might need to change the paths in "Global Parameters" area according to your environment
 * Test: test() in model.py
