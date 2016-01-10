@@ -13,3 +13,6 @@
 * Test: test() in model.py
 
 ![alt tag](https://github.com/jazzsaxmafia/video_to_sequence/blob/master/plane.jpg)
+
+### License
+* BSD License
